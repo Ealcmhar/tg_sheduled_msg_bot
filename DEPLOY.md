@@ -24,7 +24,16 @@ This guide explains how to deploy your Telegram Bot to a free Google Cloud Platf
 10. Click **Create**.
 11. Once created, click the **SSH** button next to your instance to open the terminal.
 
-## 2. Preparation (Collect your data)
+## 2. Clone the Repository
+
+In the SSH terminal, run the following commands:
+
+```bash
+git clone https://github.com/Ealcmhar/tg_sheduled_msg_bot
+cd tg_sheduled_msg_bot
+```
+
+## 3. Preparation (Collect your data)
 
 Before starting the setup, make sure you have:
 - **API_ID** and **API_HASH**: From [my.telegram.org](https://my.telegram.org/apps).
@@ -41,7 +50,7 @@ When asked to edit a file, follow these steps:
 
 ---
 
-## 3. Automated Setup (Recommended)
+## 4. Automated Setup (Recommended)
 
 Once you've cloned the repository and entered the directory, simply run:
 
@@ -64,7 +73,7 @@ sudo systemctl start tgbot
 
 ---
 
-## 4. Manual Setup (Alternative)
+## 5. Manual Setup (Alternative)
 
 To ensure the bot runs 24/7 and restarts automatically after a server reboot or crash, create a systemd service.
 
@@ -106,7 +115,7 @@ To ensure the bot runs 24/7 and restarts automatically after a server reboot or 
     sudo systemctl status tgbot
     ```
 
-## 5. Maintenance
+## 6. Maintenance
 
 - **View logs:** `journalctl -u tgbot -f`
 - **Restart bot:** `sudo systemctl restart tgbot`

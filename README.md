@@ -23,8 +23,8 @@ A comprehensive system for managing and automating Telegram message delivery. Th
 ### 2. Installation
 ```bash
 # Clone the repository
-git clone <your-repo-url>
-cd bot
+git clone https://github.com/Ealcmhar/tg_sheduled_msg_bot
+cd tg_sheduled_msg_bot
 
 # Create and activate virtual environment
 python3 -m venv venv
