@@ -14,8 +14,8 @@ echo "📂 Path detected: $BOT_PATH"
 
 # 2. Update and Install System Dependencies
 echo "📦 Updating system packages..."
-sudo apt update && sudo apt upgrade -y
-sudo apt install python3-pip python3-venv git -y
+sudo DEBIAN_FRONTEND=noninteractive apt update && sudo DEBIAN_FRONTEND=noninteractive apt upgrade -y
+sudo DEBIAN_FRONTEND=noninteractive apt install python3-pip python3-venv git -y
 
 # 3. Setup Virtual Environment
 echo "🐍 Creating virtual environment..."

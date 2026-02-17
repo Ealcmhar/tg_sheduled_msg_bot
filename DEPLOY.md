@@ -26,9 +26,10 @@ This guide explains how to deploy your Telegram Bot to a free Google Cloud Platf
 
 ## 2. Clone the Repository
 
-In the SSH terminal, run the following commands:
+In the SSH terminal, run the following commands to install git, nano and get the code (this will skip interactive restart prompts):
 
 ```bash
+sudo DEBIAN_FRONTEND=noninteractive apt update && sudo DEBIAN_FRONTEND=noninteractive apt install git nano -y
 git clone https://github.com/Ealcmhar/tg_sheduled_msg_bot
 cd tg_sheduled_msg_bot
 ```
