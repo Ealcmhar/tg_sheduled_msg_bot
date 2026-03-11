@@ -31,7 +31,7 @@ class TelegramSender:
         self.messages_config = self._load_messages_config()
         
         # Create client
-        self.client = TelegramClient('session', int(self.api_id), self.api_hash)
+        self.client = TelegramClient('session', int(self.api_id), self.api_hash, device_model="Windows 11", system_version="10.0.22621", app_version="4.11.2")
     
     def _load_messages_config(self):
         """Load messages configuration from YAML file or environment variables"""
