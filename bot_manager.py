@@ -1,6 +1,8 @@
 import os
 import asyncio
 import yaml
+import io
+import qrcode
 from datetime import datetime
 from telethon import TelegramClient, events, Button
 from dotenv import load_dotenv
@@ -201,7 +203,7 @@ async def auth_handler(event):
         await event.respond("❌ PHONE_NUMBER not found in .env")
         raise events.StopPropagation
 
-    user_client = TelegramClient('session', int(API_ID), API_HASH, device_model="Desktop", system_version="24.6.0", app_version="1.34.0")
+    user_client = TelegramClient('session', int(API_ID), API_HASH, device_model="Windows 11", system_version="10.0.22621", app_version="4.11.2")
     await user_client.connect()
     
     if await user_client.is_user_authorized():
@@ -211,18 +213,88 @@ async def auth_handler(event):
         raise events.StopPropagation
 
     try:
-        await user_client.send_code_request(PHONE_NUMBER)
+        # 1) Primary auth flow: QR login
+        from telethon.errors import SessionPasswordNeededError
+
+        await event.respond(
+            "🔐 **Primary login method: QR**\n\n"
+            "1) Open Telegram on your phone\n"
+            "2) Settings → Devices → Link Desktop Device\n"
+            "3) Scan the QR code I send below\n\n"
+            "ℹ️ QR is auto-refreshed every ~25 seconds to avoid 'invalid QR code'.",
+            buttons=Button.clear()
+        )
+
+        qr_authorized = False
+        for attempt in range(1, 6):
+            qr_login = await user_client.qr_login()
+
+            qr_builder = qrcode.QRCode(
+                version=None,
+                error_correction=qrcode.constants.ERROR_CORRECT_H,
+                box_size=14,
+                border=4,
+            )
+            qr_builder.add_data(qr_login.url)
+            qr_builder.make(fit=True)
+            qr_image = qr_builder.make_image(fill_color="black", back_color="white")
+
+            qr_buffer = io.BytesIO()
+            qr_image.save(qr_buffer, format='PNG')
+            qr_buffer.seek(0)
+            qr_buffer.name = f'telegram_qr_login_{attempt}.png'
+
+            await event.respond(
+                f"📷 QR attempt {attempt}/5 (valid for a short time). Scan now:",
+                file=qr_buffer,
+                force_document=True
+            )
+
+            try:
+                await qr_login.wait(timeout=25)
+                qr_authorized = True
+                break
+            except asyncio.TimeoutError:
+                continue
+
+        if qr_authorized:
+            me = await user_client.get_me()
+            await event.respond(f"✅ Successfully authenticated via QR as {me.first_name}!", buttons=MAIN_MENU)
+            await user_client.disconnect()
+            raise events.StopPropagation
+
+        await event.respond("⌛ QR login was not completed in time. Switching to fallback code authentication...")
+
+        # 2) Fallback flow: app/SMS/call code
+        sent_code = await user_client.send_code_request(PHONE_NUMBER)
+
+        from telethon.tl.types import auth
+        delivery_type = "Unknown"
+        if isinstance(sent_code.type, auth.SentCodeTypeApp):
+            delivery_type = "Telegram App (official application)"
+        elif isinstance(sent_code.type, auth.SentCodeTypeSms):
+            delivery_type = "SMS"
+        elif isinstance(sent_code.type, auth.SentCodeTypeCall):
+            delivery_type = "Phone Call"
+        elif isinstance(sent_code.type, auth.SentCodeTypeFlashCall):
+            delivery_type = "Flash Call"
+        elif isinstance(sent_code.type, auth.SentCodeTypeMissedCall):
+            delivery_type = "Missed Call"
+
         user_states[event.sender_id] = {
             'state': State.WAITING_AUTH_CODE,
             'client': user_client,
             'phone': PHONE_NUMBER
         }
         await event.respond(
-            "📩 Verification code sent!\n\n"
+            f"📩 Verification code sent via **{delivery_type}**!\n\n"
+            f"📍 Please check your {delivery_type}.\n\n"
             "⚠️ **IMPORTANT**: To bypass Telegram's security, please enter the code **WITH SPACES** between digits.\n"
-            "Example: `1 2 3 4 5`", 
+            "Example: `1 2 3 4 5`",
             buttons=Button.clear()
         )
+    except events.StopPropagation:
+        raise
     except Exception as e:
         await event.respond(f"❌ Error: {str(e)}", buttons=MAIN_MENU)
         await user_client.disconnect()
