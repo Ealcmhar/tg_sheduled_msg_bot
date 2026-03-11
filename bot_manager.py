@@ -3,6 +3,7 @@ import asyncio
 import yaml
 import io
 import qrcode
+import re
 from datetime import datetime
 from telethon import TelegramClient, events, Button
 from dotenv import load_dotenv
@@ -48,6 +49,47 @@ async def start_handler(event):
     raise events.StopPropagation
 
 CONFIG_PATH = 'messages.yaml'
+DAYS_OF_WEEK = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+
+
+def normalize_time_str(time_str):
+    """Accept H:MM or HH:MM and normalize to HH:MM."""
+    if not time_str:
+        return None
+    match = re.fullmatch(r"(\d{1,2}):(\d{2})", time_str.strip())
+    if not match:
+        return None
+
+    hour = int(match.group(1))
+    minute = int(match.group(2))
+    if not (0 <= hour <= 23 and 0 <= minute <= 59):
+        return None
+
+    return f"{hour:02d}:{minute:02d}"
+
+
+def get_weekly_days(schedule):
+    """Backward compatible reader for weekly schedule days."""
+    if not schedule or schedule.get('type') != 'weekly':
+        return []
+
+    days = schedule.get('days')
+    if isinstance(days, list):
+        return [d for d in days if d in DAYS_OF_WEEK]
+
+    day = schedule.get('day')
+    if isinstance(day, str) and day in DAYS_OF_WEEK:
+        return [day]
+
+    return []
+
+
+def build_days_selection_buttons():
+    return [
+        [Button.text(d, resize=True) for d in DAYS_OF_WEEK[:4]],
+        [Button.text(d, resize=True) for d in DAYS_OF_WEEK[4:]],
+        [Button.text("✅ Done", resize=True)]
+    ]
 
 def load_config():
     if not os.path.exists(CONFIG_PATH):
@@ -86,7 +128,9 @@ async def list_message_handler(event):
             if schedule['type'] == 'daily':
                 sched_text = f"⏰ Daily at {schedule['time']}"
             elif schedule['type'] == 'weekly':
-                sched_text = f"📅 {schedule['day']} at {schedule['time']}"
+                weekly_days = get_weekly_days(schedule)
+                days_str = ", ".join(weekly_days) if weekly_days else "(no days selected)"
+                sched_text = f"📅 {days_str} at {schedule['time']}"
         
         response += f"🆔 **{msg_id}**\n"
         response += f"📝 {display_text}\n"
@@ -440,29 +484,58 @@ async def conversation_handler(event):
         await event.respond("Step 4: Choose a **schedule** for this message:", buttons=buttons)
 
     elif current_state == State.WAITING_SCHEDULE_TIME:
-        time_str = event.text.strip()
-        # Basic validation HH:MM
-        if ':' in time_str and len(time_str.split(':')) == 2:
-            state_data['data']['schedule']['time'] = time_str
+        normalized_time = normalize_time_str(event.text)
+        if normalized_time:
+            state_data['data']['schedule']['time'] = normalized_time
             
             if state_data['data']['schedule']['type'] == 'weekly':
                 state_data['state'] = State.WAITING_SCHEDULE_DAY
-                days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
-                buttons = [[Button.text(d, resize=True) for d in days[:4]], [Button.text(d, resize=True) for d in days[4:]]]
-                await event.respond("Step 5: Choose the **day of the week**:", buttons=buttons)
+                await event.respond(
+                    "Step 5: Choose one or more **days of the week**.\n"
+                    "Tap day buttons to add them, then press **✅ Done**.",
+                    buttons=build_days_selection_buttons()
+                )
             else:
                 await finalize_add_message(event, user_id, state_data)
         else:
-            await event.respond("❌ Invalid time format. Please use **HH:MM** (e.g., 14:30):")
+            await event.respond("❌ Invalid time format. Please use **H:MM** or **HH:MM** (e.g., `9:00` or `09:00`):")
 
     elif current_state == State.WAITING_SCHEDULE_DAY:
-        day = event.text.strip()
-        days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
-        if day in days:
-            state_data['data']['schedule']['day'] = day
+        selected_day = event.text.strip()
+        if selected_day == "✅ Done":
+            selected_days = state_data['data']['schedule'].get('days', [])
+            if not selected_days:
+                await event.respond(
+                    "❌ Please select at least one day before finishing.",
+                    buttons=build_days_selection_buttons()
+                )
+                return
             await finalize_add_message(event, user_id, state_data)
+            return
+
+        if selected_day in DAYS_OF_WEEK:
+            existing_days = state_data['data']['schedule'].get('days', [])
+            if selected_day not in existing_days:
+                existing_days.append(selected_day)
+                state_data['data']['schedule']['days'] = existing_days
+                await event.respond(
+                    f"✅ Added: **{selected_day}**\n"
+                    f"Current: {', '.join(existing_days)}\n\n"
+                    "Add more days or press **✅ Done**.",
+                    buttons=build_days_selection_buttons()
+                )
+            else:
+                await event.respond(
+                    f"ℹ️ **{selected_day}** is already selected.\n"
+                    f"Current: {', '.join(existing_days)}\n\n"
+                    "Add more days or press **✅ Done**.",
+                    buttons=build_days_selection_buttons()
+                )
         else:
-            await event.respond("❌ Please choose a valid day from the menu.")
+            await event.respond(
+                "❌ Please use day buttons and then press **✅ Done**.",
+                buttons=build_days_selection_buttons()
+            )
 
 async def finalize_add_message(event, user_id, state_data):
     config = load_config()
@@ -493,11 +566,11 @@ async def schedule_type_handler(event):
     elif data == "sched_daily":
         user_states[user_id]['data']['schedule'] = {'type': 'daily', 'time': ''}
         user_states[user_id]['state'] = State.WAITING_SCHEDULE_TIME
-        await event.edit("Step 5: Send me the **time** for daily post (format **HH:MM**, e.g., 09:00):")
+        await event.edit("Step 5: Send me the **time** for daily post (format **H:MM** or **HH:MM**, e.g., 9:00 or 09:00):")
     elif data == "sched_weekly":
-        user_states[user_id]['data']['schedule'] = {'type': 'weekly', 'time': '', 'day': ''}
+        user_states[user_id]['data']['schedule'] = {'type': 'weekly', 'time': '', 'days': []}
         user_states[user_id]['state'] = State.WAITING_SCHEDULE_TIME
-        await event.edit("Step 5: Send me the **time** for weekly post (format **HH:MM**, e.g., 18:00):")
+        await event.edit("Step 5: Send me the **time** for weekly post (format **H:MM** or **HH:MM**, e.g., 9:00 or 18:00):")
 
 @bot.on(events.CallbackQuery(data="skip_images"))
 @admin_only
@@ -508,6 +581,7 @@ async def skip_images_handler(event):
         await event.edit("Step 3: Send me the **recipients** (comma-separated IDs or usernames).")
     else:
         await event.answer("Operation not valid anymore.")
+
 
 @bot.on(events.NewMessage(pattern=r'/find_group_id|🔍 Find ID'))
 @admin_only
@@ -679,8 +753,10 @@ async def scheduler_loop():
                 should_send = False
                 if schedule['type'] == 'daily' and schedule['time'] == current_time:
                     should_send = True
-                elif schedule['type'] == 'weekly' and schedule['time'] == current_time and schedule['day'] == current_day:
-                    should_send = True
+                elif schedule['type'] == 'weekly' and schedule['time'] == current_time:
+                    weekly_days = get_weekly_days(schedule)
+                    if current_day in weekly_days:
+                        should_send = True
                 
                 if should_send:
                     print(f"⏰ Scheduler: Sending {msg_id}...")
