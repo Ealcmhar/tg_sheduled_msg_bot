@@ -210,39 +210,15 @@ class TelegramSender:
                             try:
                                 group_entity = await self.client.get_entity(int(group_id_str))
                                 topic_id = int(topic_id_str)
-                                
-                                # Get a message from the topic to reply to
-                                try:
-                                    from telethon.tl.functions.channels import GetForumTopicsRequest
-                                except ImportError:
-                                    from telethon.tl.functions.messages import GetForumTopicsRequest
-                                
-                                result = await self.client(GetForumTopicsRequest(
-                                    channel=group_entity,
-                                    offset_date=0,
-                                    offset_id=0,
-                                    offset_topic=0,
-                                    limit=100
-                                ))
-                                
-                                # Find the topic
-                                topic = None
-                                for t in result.topics:
-                                    if t.id == topic_id:
-                                        topic = t
-                                        break
-                                
-                                if topic and hasattr(topic, 'top_message') and topic.top_message:
-                                    # Send message to the topic
-                                    await self._send_message_with_images(
-                                        group_entity,
-                                        message,
-                                        image_paths,
-                                        reply_to=topic.top_message
-                                    )
-                                    self.log(f"✓ Message sent to topic {topic_id} in group {group_id_str}")
-                                else:
-                                    raise ValueError(f"Topic {topic_id} not found or has no messages")
+
+                                # Send directly to topic thread ID (no explicit reply to the latest message)
+                                await self._send_message_with_images(
+                                    group_entity,
+                                    message,
+                                    image_paths,
+                                    topic_id=topic_id
+                                )
+                                self.log(f"✓ Message sent to topic {topic_id} in group {group_id_str}")
                                 
                                 sent_count += 1
                                 continue
@@ -276,10 +252,17 @@ class TelegramSender:
         self.log(f"="*60)
         self.log(f"Total: {total_sent} sent, {total_failed} failed")
     
-    async def _send_message_with_images(self, entity, message, image_paths, reply_to=None):
+    async def _send_message_with_images(self, entity, message, image_paths, reply_to=None, topic_id=None):
         """
         Send message with images. All images are sent in one message with text as caption.
         """
+        send_kwargs = {}
+        if topic_id is not None:
+            # For forum topics we pass thread id directly, avoiding explicit reply to a concrete message
+            send_kwargs['reply_to'] = topic_id
+        elif reply_to is not None:
+            send_kwargs['reply_to'] = reply_to
+
         # Filter valid image files
         valid_images = [img for img in image_paths if os.path.exists(img)]
         
@@ -296,21 +279,21 @@ class TelegramSender:
                     entity,
                     valid_images,
                     caption=message if message else None,
-                    reply_to=reply_to
+                    **send_kwargs
                 )
             except Exception as e:
                 # Fallback: if sending album with caption fails, try sending text separately
                 self.log(f"⚠ Failed to send with caption, trying separate: {e}")
-                await self.client.send_file(entity, valid_images, reply_to=reply_to)
+                await self.client.send_file(entity, valid_images, **send_kwargs)
                 if message:
-                    await self.client.send_message(entity, message)
+                    await self.client.send_message(entity, message, **send_kwargs)
         else:
             # No valid images, send text only
             if message:
                 await self.client.send_message(
                     entity,
                     message,
-                    reply_to=reply_to
+                    **send_kwargs
                 )
     
     async def run(self):
