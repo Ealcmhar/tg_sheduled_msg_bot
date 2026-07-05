@@ -31,7 +31,8 @@ bot = TelegramClient('bot_session', int(API_ID), API_HASH)
 MAIN_MENU = [
     [Button.text("📋 List Messages", resize=True), Button.text("➕ Add Message", resize=True)],
     [Button.text("❌ Remove Message", resize=True), Button.text("🔍 Find ID", resize=True)],
-    [Button.text("🚀 Send Now", resize=True), Button.text("🔑 Auth", resize=True)]
+    [Button.text("🚀 Send Now", resize=True), Button.text("🔑 Auth", resize=True)],
+    [Button.text("🧹 Delete by Word", resize=True)]
 ]
 
 def admin_only(func):
@@ -238,6 +239,69 @@ class State:
     WAITING_SCHEDULE_TYPE = 6
     WAITING_SCHEDULE_TIME = 7
     WAITING_SCHEDULE_DAY = 8
+    WAITING_DELETE_KEYWORD = 9
+
+
+def create_user_client():
+    return TelegramClient(
+        'session',
+        int(API_ID),
+        API_HASH,
+        device_model="Windows 11",
+        system_version="10.0.22621",
+        app_version="4.11.2"
+    )
+
+
+async def delete_messages_by_keyword(keyword, progress_callback=None):
+    deleted_count = 0
+    matched_count = 0
+    scanned_chats = 0
+    failed_chats = []
+
+    user_client = create_user_client()
+    try:
+        await user_client.connect()
+        if not await user_client.is_user_authorized():
+            raise RuntimeError("User session not authorized. Use **🔑 Auth** first.")
+
+        dialogs = await user_client.get_dialogs(limit=None)
+        for dialog in dialogs:
+            scanned_chats += 1
+            ids_to_delete = []
+
+            try:
+                async for message in user_client.iter_messages(dialog.entity, search=keyword, limit=None):
+                    if not getattr(message, 'out', False):
+                        continue
+
+                    ids_to_delete.append(message.id)
+                    matched_count += 1
+
+                    if len(ids_to_delete) >= 100:
+                        await user_client.delete_messages(dialog.entity, ids_to_delete, revoke=True)
+                        deleted_count += len(ids_to_delete)
+                        ids_to_delete = []
+
+                if ids_to_delete:
+                    await user_client.delete_messages(dialog.entity, ids_to_delete, revoke=True)
+                    deleted_count += len(ids_to_delete)
+
+            except Exception as e:
+                chat_name = getattr(dialog, 'name', None) or getattr(dialog.entity, 'title', None) or str(dialog.id)
+                failed_chats.append(f"{chat_name}: {e}")
+
+            if progress_callback and scanned_chats % 10 == 0:
+                await progress_callback(scanned_chats, deleted_count)
+    finally:
+        await user_client.disconnect()
+
+    return {
+        'deleted_count': deleted_count,
+        'matched_count': matched_count,
+        'scanned_chats': scanned_chats,
+        'failed_chats': failed_chats,
+    }
 
 @bot.on(events.NewMessage(pattern=r'/auth|🔑 Auth'))
 @admin_only
@@ -355,11 +419,25 @@ async def add_message_handler(event):
     await event.respond("Step 1: Send me the **text** for the message.", buttons=Button.clear())
     raise events.StopPropagation
 
+
+@bot.on(events.NewMessage(pattern=r'/delete_by_word|🧹 Delete by Word'))
+@admin_only
+async def delete_by_word_handler(event):
+    user_states[event.sender_id] = {
+        'state': State.WAITING_DELETE_KEYWORD
+    }
+    await event.respond(
+        "Send me the **word or phrase** to delete.\n\n"
+        "I will search across all chats and delete only **your own outgoing messages** that contain it.",
+        buttons=Button.clear()
+    )
+    raise events.StopPropagation
+
 @bot.on(events.NewMessage())
 @admin_only
 async def conversation_handler(event):
     # Ignore commands or menu button text if NOT in a state
-    if event.text.startswith('/') or event.text in ["📋 List Messages", "➕ Add Message", "❌ Remove Message", "🔍 Find ID", "❓ Help"]:
+    if event.text.startswith('/') or event.text in ["📋 List Messages", "➕ Add Message", "❌ Remove Message", "🔍 Find ID", "🧹 Delete by Word", "❓ Help"]:
         if event.sender_id not in user_states:
             return
 
@@ -421,6 +499,49 @@ async def conversation_handler(event):
                 await event.respond(f"❌ Error: {error_msg}. Starting over...", buttons=MAIN_MENU)
             await client.disconnect()
             del user_states[user_id]
+        return
+
+    elif current_state == State.WAITING_DELETE_KEYWORD:
+        keyword = event.text.strip()
+        if not keyword:
+            await event.respond("❌ Please send a non-empty word or phrase.")
+            return
+
+        status_msg = await event.respond(
+            f"🧹 Searching all chats for: `{keyword}`\n\n"
+            "Deleting only your outgoing messages. This may take some time..."
+        )
+
+        async def update_progress(scanned_chats, deleted_count):
+            try:
+                await status_msg.edit(
+                    f"🧹 Searching all chats for: `{keyword}`\n\n"
+                    f"Scanned chats: **{scanned_chats}**\n"
+                    f"Deleted messages: **{deleted_count}**"
+                )
+            except Exception:
+                pass
+
+        try:
+            result = await delete_messages_by_keyword(keyword, progress_callback=update_progress)
+            del user_states[user_id]
+
+            response = (
+                f"✅ Cleanup finished for: `{keyword}`\n\n"
+                f"Scanned chats: **{result['scanned_chats']}**\n"
+                f"Matched your messages: **{result['matched_count']}**\n"
+                f"Deleted: **{result['deleted_count']}**"
+            )
+
+            failed_chats = result['failed_chats'][:5]
+            if failed_chats:
+                response += "\n\n⚠ Some chats could not be processed:\n"
+                response += "\n".join(f"• {item}" for item in failed_chats)
+
+            await status_msg.edit(response, buttons=MAIN_MENU)
+        except Exception as e:
+            del user_states[user_id]
+            await status_msg.edit(f"❌ Delete by word failed: {e}", buttons=MAIN_MENU)
         return
 
     # --- Add Message Flow ---
