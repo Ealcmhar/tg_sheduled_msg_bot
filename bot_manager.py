@@ -253,11 +253,23 @@ def create_user_client():
     )
 
 
+def can_delete_for_everyone(entity):
+    if getattr(entity, 'creator', False):
+        return True
+
+    admin_rights = getattr(entity, 'admin_rights', None)
+    if admin_rights and getattr(admin_rights, 'delete_messages', False):
+        return True
+
+    return False
+
+
 async def delete_messages_by_keywords(keywords, progress_callback=None):
     deleted_count = 0
     matched_count = 0
     scanned_chats = 0
     failed_chats = []
+    processed_keyword_index = 0
 
     user_client = create_user_client()
     try:
@@ -268,37 +280,87 @@ async def delete_messages_by_keywords(keywords, progress_callback=None):
         dialogs = await user_client.get_dialogs(limit=None)
         for dialog in dialogs:
             scanned_chats += 1
-            ids_to_delete = set()
+            outgoing_ids_to_delete = set()
+            incoming_revoke_ids_to_delete = set()
+            incoming_local_ids_to_delete = set()
+            delete_incoming_for_everyone = can_delete_for_everyone(dialog.entity)
 
             try:
-                for keyword in keywords:
+                for keyword_index, keyword in enumerate(keywords, start=1):
+                    processed_keyword_index = max(processed_keyword_index, keyword_index)
+                    if progress_callback:
+                        await progress_callback(
+                            keyword=keyword,
+                            keyword_index=keyword_index,
+                            total_keywords=len(keywords),
+                            scanned_chats=scanned_chats,
+                            total_chats=len(dialogs),
+                            deleted_count=deleted_count
+                        )
+
                     async for message in user_client.iter_messages(dialog.entity, search=keyword, limit=None):
-                        if not getattr(message, 'out', False):
+                        if (
+                            message.id in outgoing_ids_to_delete
+                            or message.id in incoming_revoke_ids_to_delete
+                            or message.id in incoming_local_ids_to_delete
+                        ):
                             continue
 
-                        if message.id in ids_to_delete:
-                            continue
-
-                        ids_to_delete.add(message.id)
+                        if getattr(message, 'out', False):
+                            outgoing_ids_to_delete.add(message.id)
+                        elif delete_incoming_for_everyone:
+                            incoming_revoke_ids_to_delete.add(message.id)
+                        else:
+                            incoming_local_ids_to_delete.add(message.id)
                         matched_count += 1
 
-                        if len(ids_to_delete) >= 100:
-                            batch_ids = list(ids_to_delete)
+                        if len(outgoing_ids_to_delete) >= 100:
+                            batch_ids = list(outgoing_ids_to_delete)
                             await user_client.delete_messages(dialog.entity, batch_ids, revoke=True)
                             deleted_count += len(batch_ids)
-                            ids_to_delete.clear()
+                            outgoing_ids_to_delete.clear()
 
-                if ids_to_delete:
-                    batch_ids = list(ids_to_delete)
+                        if len(incoming_revoke_ids_to_delete) >= 100:
+                            batch_ids = list(incoming_revoke_ids_to_delete)
+                            await user_client.delete_messages(dialog.entity, batch_ids, revoke=True)
+                            deleted_count += len(batch_ids)
+                            incoming_revoke_ids_to_delete.clear()
+
+                        if len(incoming_local_ids_to_delete) >= 100:
+                            batch_ids = list(incoming_local_ids_to_delete)
+                            await user_client.delete_messages(dialog.entity, batch_ids, revoke=False)
+                            deleted_count += len(batch_ids)
+                            incoming_local_ids_to_delete.clear()
+
+                if outgoing_ids_to_delete:
+                    batch_ids = list(outgoing_ids_to_delete)
                     await user_client.delete_messages(dialog.entity, batch_ids, revoke=True)
+                    deleted_count += len(batch_ids)
+
+                if incoming_revoke_ids_to_delete:
+                    batch_ids = list(incoming_revoke_ids_to_delete)
+                    await user_client.delete_messages(dialog.entity, batch_ids, revoke=True)
+                    deleted_count += len(batch_ids)
+
+                if incoming_local_ids_to_delete:
+                    batch_ids = list(incoming_local_ids_to_delete)
+                    await user_client.delete_messages(dialog.entity, batch_ids, revoke=False)
                     deleted_count += len(batch_ids)
 
             except Exception as e:
                 chat_name = getattr(dialog, 'name', None) or getattr(dialog.entity, 'title', None) or str(dialog.id)
                 failed_chats.append(f"{chat_name}: {e}")
 
-            if progress_callback and scanned_chats % 10 == 0:
-                await progress_callback(scanned_chats, deleted_count)
+        if progress_callback and keywords:
+            final_keyword_index = min(processed_keyword_index or 1, len(keywords))
+            await progress_callback(
+                keyword=keywords[final_keyword_index - 1],
+                keyword_index=final_keyword_index,
+                total_keywords=len(keywords),
+                scanned_chats=scanned_chats,
+                total_chats=len(dialogs),
+                deleted_count=deleted_count
+            )
     finally:
         await user_client.disconnect()
 
@@ -435,7 +497,7 @@ async def delete_by_word_handler(event):
     await event.respond(
         "Send me one or more **words/phrases** separated by commas.\n\n"
         "Example: `spam, test, old promo`\n\n"
-        "I will search across all chats and delete only **your own outgoing messages** that contain any of them.",
+        "I will search across all chats. Outgoing matches will be deleted for everyone, and incoming matches will be deleted for everyone only in chats where your account has that permission.",
         buttons=Button.clear()
     )
     raise events.StopPropagation
@@ -518,14 +580,15 @@ async def conversation_handler(event):
         keywords_text = ", ".join(f"`{keyword}`" for keyword in keywords)
         status_msg = await event.respond(
             f"🧹 Searching all chats for: {keywords_text}\n\n"
-            "Deleting only your outgoing messages. This may take some time..."
+            "Deleting outgoing matches for everyone. Incoming matches are removed for everyone only where your account has moderation rights."
         )
 
-        async def update_progress(scanned_chats, deleted_count):
+        async def update_progress(keyword, keyword_index, total_keywords, scanned_chats, total_chats, deleted_count):
             try:
                 await status_msg.edit(
                     f"🧹 Searching all chats for: {keywords_text}\n\n"
-                    f"Scanned chats: **{scanned_chats}**\n"
+                    f"Current keyword: **{keyword_index}/{total_keywords}** - `{keyword}`\n"
+                    f"Scanned chats: **{scanned_chats}/{total_chats}**\n"
                     f"Deleted messages: **{deleted_count}**"
                 )
             except Exception:
