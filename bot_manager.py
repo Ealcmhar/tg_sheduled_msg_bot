@@ -593,7 +593,6 @@ async def conversation_handler(event):
         async def update_progress(keyword, keyword_index, total_keywords, scanned_chats, total_chats, deleted_count):
             marker = (keyword_index, scanned_chats)
             should_send = scanned_chats == 1 or scanned_chats == total_chats
-            should_send = should_send or scanned_chats % 25 == 0
             should_send = should_send or last_progress_marker['value'] is None
 
             if not should_send or marker == last_progress_marker['value']:
