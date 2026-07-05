@@ -264,12 +264,13 @@ def can_delete_for_everyone(entity):
     return False
 
 
-async def delete_messages_by_keywords(keywords, progress_callback=None):
+async def delete_messages_by_keywords(keywords, protected_chat_ids=None, progress_callback=None):
     deleted_count = 0
     matched_count = 0
     scanned_chats = 0
     failed_chats = []
     processed_keyword_index = 0
+    protected_chat_ids = {chat_id for chat_id in (protected_chat_ids or set()) if chat_id is not None}
 
     user_client = create_user_client()
     try:
@@ -279,6 +280,9 @@ async def delete_messages_by_keywords(keywords, progress_callback=None):
 
         dialogs = await user_client.get_dialogs(limit=None)
         for dialog in dialogs:
+            if dialog.id in protected_chat_ids:
+                continue
+
             scanned_chats += 1
             outgoing_ids_to_delete = set()
             incoming_revoke_ids_to_delete = set()
@@ -578,9 +582,11 @@ async def conversation_handler(event):
             return
 
         keywords_text = ", ".join(f"`{keyword}`" for keyword in keywords)
+        protected_chat_ids = {event.chat_id}
         status_msg = await event.respond(
             f"🧹 Searching all chats for: {keywords_text}\n\n"
-            "Deleting outgoing matches for everyone. Incoming matches are removed for everyone only where your account has moderation rights."
+            "Deleting outgoing matches for everyone. Incoming matches are removed for everyone only where your account has moderation rights.\n"
+            "This control chat is excluded from cleanup so the status stays visible."
         )
 
         async def update_progress(keyword, keyword_index, total_keywords, scanned_chats, total_chats, deleted_count):
@@ -595,7 +601,11 @@ async def conversation_handler(event):
                 pass
 
         try:
-            result = await delete_messages_by_keywords(keywords, progress_callback=update_progress)
+            result = await delete_messages_by_keywords(
+                keywords,
+                protected_chat_ids=protected_chat_ids,
+                progress_callback=update_progress
+            )
             del user_states[user_id]
 
             response = (
