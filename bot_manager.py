@@ -586,7 +586,6 @@ async def conversation_handler(event):
         protected_chat_ids = set()
         status_msg = await event.respond(
             "🧹 Started delete-by-word scan.\n\n"
-            f"Keywords: {keywords_text}"
         )
 
         last_progress_marker = {'value': None}
