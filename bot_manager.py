@@ -253,7 +253,7 @@ def create_user_client():
     )
 
 
-async def delete_messages_by_keyword(keyword, progress_callback=None):
+async def delete_messages_by_keywords(keywords, progress_callback=None):
     deleted_count = 0
     matched_count = 0
     scanned_chats = 0
@@ -268,24 +268,30 @@ async def delete_messages_by_keyword(keyword, progress_callback=None):
         dialogs = await user_client.get_dialogs(limit=None)
         for dialog in dialogs:
             scanned_chats += 1
-            ids_to_delete = []
+            ids_to_delete = set()
 
             try:
-                async for message in user_client.iter_messages(dialog.entity, search=keyword, limit=None):
-                    if not getattr(message, 'out', False):
-                        continue
+                for keyword in keywords:
+                    async for message in user_client.iter_messages(dialog.entity, search=keyword, limit=None):
+                        if not getattr(message, 'out', False):
+                            continue
 
-                    ids_to_delete.append(message.id)
-                    matched_count += 1
+                        if message.id in ids_to_delete:
+                            continue
 
-                    if len(ids_to_delete) >= 100:
-                        await user_client.delete_messages(dialog.entity, ids_to_delete, revoke=True)
-                        deleted_count += len(ids_to_delete)
-                        ids_to_delete = []
+                        ids_to_delete.add(message.id)
+                        matched_count += 1
+
+                        if len(ids_to_delete) >= 100:
+                            batch_ids = list(ids_to_delete)
+                            await user_client.delete_messages(dialog.entity, batch_ids, revoke=True)
+                            deleted_count += len(batch_ids)
+                            ids_to_delete.clear()
 
                 if ids_to_delete:
-                    await user_client.delete_messages(dialog.entity, ids_to_delete, revoke=True)
-                    deleted_count += len(ids_to_delete)
+                    batch_ids = list(ids_to_delete)
+                    await user_client.delete_messages(dialog.entity, batch_ids, revoke=True)
+                    deleted_count += len(batch_ids)
 
             except Exception as e:
                 chat_name = getattr(dialog, 'name', None) or getattr(dialog.entity, 'title', None) or str(dialog.id)
@@ -427,8 +433,9 @@ async def delete_by_word_handler(event):
         'state': State.WAITING_DELETE_KEYWORD
     }
     await event.respond(
-        "Send me the **word or phrase** to delete.\n\n"
-        "I will search across all chats and delete only **your own outgoing messages** that contain it.",
+        "Send me one or more **words/phrases** separated by commas.\n\n"
+        "Example: `spam, test, old promo`\n\n"
+        "I will search across all chats and delete only **your own outgoing messages** that contain any of them.",
         buttons=Button.clear()
     )
     raise events.StopPropagation
@@ -502,20 +509,22 @@ async def conversation_handler(event):
         return
 
     elif current_state == State.WAITING_DELETE_KEYWORD:
-        keyword = event.text.strip()
-        if not keyword:
-            await event.respond("❌ Please send a non-empty word or phrase.")
+        raw_keywords = [item.strip() for item in event.text.split(',')]
+        keywords = [item for item in raw_keywords if item]
+        if not keywords:
+            await event.respond("❌ Please send at least one non-empty word or phrase.")
             return
 
+        keywords_text = ", ".join(f"`{keyword}`" for keyword in keywords)
         status_msg = await event.respond(
-            f"🧹 Searching all chats for: `{keyword}`\n\n"
+            f"🧹 Searching all chats for: {keywords_text}\n\n"
             "Deleting only your outgoing messages. This may take some time..."
         )
 
         async def update_progress(scanned_chats, deleted_count):
             try:
                 await status_msg.edit(
-                    f"🧹 Searching all chats for: `{keyword}`\n\n"
+                    f"🧹 Searching all chats for: {keywords_text}\n\n"
                     f"Scanned chats: **{scanned_chats}**\n"
                     f"Deleted messages: **{deleted_count}**"
                 )
@@ -523,11 +532,11 @@ async def conversation_handler(event):
                 pass
 
         try:
-            result = await delete_messages_by_keyword(keyword, progress_callback=update_progress)
+            result = await delete_messages_by_keywords(keywords, progress_callback=update_progress)
             del user_states[user_id]
 
             response = (
-                f"✅ Cleanup finished for: `{keyword}`\n\n"
+                f"✅ Cleanup finished for: {keywords_text}\n\n"
                 f"Scanned chats: **{result['scanned_chats']}**\n"
                 f"Matched your messages: **{result['matched_count']}**\n"
                 f"Deleted: **{result['deleted_count']}**"
