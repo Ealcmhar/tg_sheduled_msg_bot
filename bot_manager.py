@@ -279,6 +279,7 @@ async def delete_messages_by_keywords(keywords, protected_chat_ids=None, progres
             raise RuntimeError("User session not authorized. Use **🔑 Auth** first.")
 
         dialogs = await user_client.get_dialogs(limit=None)
+        total_target_chats = sum(1 for dialog in dialogs if dialog.id not in protected_chat_ids)
         for dialog in dialogs:
             if dialog.id in protected_chat_ids:
                 continue
@@ -298,7 +299,7 @@ async def delete_messages_by_keywords(keywords, protected_chat_ids=None, progres
                             keyword_index=keyword_index,
                             total_keywords=len(keywords),
                             scanned_chats=scanned_chats,
-                            total_chats=len(dialogs),
+                            total_chats=total_target_chats,
                             deleted_count=deleted_count
                         )
 
@@ -362,7 +363,7 @@ async def delete_messages_by_keywords(keywords, protected_chat_ids=None, progres
                 keyword_index=final_keyword_index,
                 total_keywords=len(keywords),
                 scanned_chats=scanned_chats,
-                total_chats=len(dialogs),
+                total_chats=total_target_chats,
                 deleted_count=deleted_count
             )
     finally:
@@ -620,10 +621,19 @@ async def conversation_handler(event):
                 response += "\n\n⚠ Some chats could not be processed:\n"
                 response += "\n".join(f"• {item}" for item in failed_chats)
 
-            await status_msg.edit(response, buttons=MAIN_MENU)
+            try:
+                await status_msg.edit(response, buttons=MAIN_MENU)
+            except Exception:
+                pass
+            await event.respond(response, buttons=MAIN_MENU)
         except Exception as e:
             del user_states[user_id]
-            await status_msg.edit(f"❌ Delete by word failed: {e}", buttons=MAIN_MENU)
+            error_text = f"❌ Delete by word failed: {e}"
+            try:
+                await status_msg.edit(error_text, buttons=MAIN_MENU)
+            except Exception:
+                pass
+            await event.respond(error_text, buttons=MAIN_MENU)
         return
 
     # --- Add Message Flow ---
