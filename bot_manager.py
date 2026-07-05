@@ -603,8 +603,6 @@ async def conversation_handler(event):
             try:
                 await status_msg.edit(
                     "🧹 Scan in progress.\n\n"
-                    f"Keywords: `{keywords_text}`\n"
-                    f"Current keyword: {keyword_index}/{total_keywords} - `{keyword}`\n"
                     f"Scanned chats: {scanned_chats}/{total_chats}\n"
                     f"Deleted messages: {deleted_count}"
                 )
