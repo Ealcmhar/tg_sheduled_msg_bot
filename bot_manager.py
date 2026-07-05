@@ -583,14 +583,10 @@ async def conversation_handler(event):
             return
 
         keywords_text = ", ".join(keywords)
-        protected_chat_ids = {event.chat_id}
-        del user_states[user_id]
-
-        await bot.send_message(
-            event.chat_id,
+        protected_chat_ids = set()
+        status_msg = await event.respond(
             "🧹 Started delete-by-word scan.\n\n"
-            f"Keywords: {keywords_text}\n"
-            "Control chat is excluded from cleanup."
+            f"Keywords: {keywords_text}"
         )
 
         last_progress_marker = {'value': None}
@@ -604,13 +600,16 @@ async def conversation_handler(event):
                 return
 
             last_progress_marker['value'] = marker
-            await bot.send_message(
-                event.chat_id,
-                "🧹 Scan in progress.\n\n"
-                f"Current keyword: {keyword_index}/{total_keywords} - {keyword}\n"
-                f"Scanned chats: {scanned_chats}/{total_chats}\n"
-                f"Deleted messages: {deleted_count}"
-            )
+            try:
+                await status_msg.edit(
+                    "🧹 Scan in progress.\n\n"
+                    f"Keywords: {keywords_text}\n"
+                    f"Current keyword: {keyword_index}/{total_keywords} - {keyword}\n"
+                    f"Scanned chats: {scanned_chats}/{total_chats}\n"
+                    f"Deleted messages: {deleted_count}"
+                )
+            except Exception:
+                pass
 
         try:
             result = await delete_messages_by_keywords(
@@ -618,6 +617,7 @@ async def conversation_handler(event):
                 protected_chat_ids=protected_chat_ids,
                 progress_callback=update_progress
             )
+            del user_states[user_id]
 
             response = (
                 "✅ Delete-by-word scan completed.\n\n"
@@ -632,10 +632,17 @@ async def conversation_handler(event):
                 response += "\n\nSome chats could not be processed:\n"
                 response += "\n".join(f"• {item}" for item in failed_chats)
 
-            await bot.send_message(event.chat_id, response, buttons=MAIN_MENU)
+            try:
+                await status_msg.edit(response, buttons=MAIN_MENU)
+            except Exception:
+                await event.respond(response, buttons=MAIN_MENU)
         except Exception as e:
+            del user_states[user_id]
             error_text = f"❌ Delete-by-word scan failed: {e}"
-            await bot.send_message(event.chat_id, error_text, buttons=MAIN_MENU)
+            try:
+                await status_msg.edit(error_text, buttons=MAIN_MENU)
+            except Exception:
+                await event.respond(error_text, buttons=MAIN_MENU)
         return
 
     # --- Add Message Flow ---
