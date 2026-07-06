@@ -267,9 +267,8 @@ def can_delete_for_everyone(entity):
 async def delete_messages_by_keywords(keywords, protected_chat_ids=None, progress_callback=None):
     deleted_count = 0
     matched_count = 0
-    scanned_chats = 0
     failed_chats = []
-    processed_keyword_index = 0
+    scanned_chats = 0
     protected_chat_ids = {chat_id for chat_id in (protected_chat_ids or set()) if chat_id is not None}
 
     user_client = create_user_client()
@@ -279,20 +278,20 @@ async def delete_messages_by_keywords(keywords, protected_chat_ids=None, progres
             raise RuntimeError("User session not authorized. Use **🔑 Auth** first.")
 
         dialogs = await user_client.get_dialogs(limit=None)
-        total_target_chats = sum(1 for dialog in dialogs if dialog.id not in protected_chat_ids)
-        for dialog in dialogs:
-            if dialog.id in protected_chat_ids:
-                continue
+        target_dialogs = [dialog for dialog in dialogs if dialog.id not in protected_chat_ids]
+        total_target_chats = len(target_dialogs)
 
-            scanned_chats += 1
-            outgoing_ids_to_delete = set()
-            incoming_revoke_ids_to_delete = set()
-            incoming_local_ids_to_delete = set()
-            delete_incoming_for_everyone = can_delete_for_everyone(dialog.entity)
+        for keyword_index, keyword in enumerate(keywords, start=1):
+            scanned_chats = 0
 
-            try:
-                for keyword_index, keyword in enumerate(keywords, start=1):
-                    processed_keyword_index = max(processed_keyword_index, keyword_index)
+            for dialog in target_dialogs:
+                scanned_chats += 1
+                outgoing_ids_to_delete = set()
+                incoming_revoke_ids_to_delete = set()
+                incoming_local_ids_to_delete = set()
+                delete_incoming_for_everyone = can_delete_for_everyone(dialog.entity)
+
+                try:
                     if progress_callback:
                         await progress_callback(
                             keyword=keyword,
@@ -337,35 +336,24 @@ async def delete_messages_by_keywords(keywords, protected_chat_ids=None, progres
                             deleted_count += len(batch_ids)
                             incoming_local_ids_to_delete.clear()
 
-                if outgoing_ids_to_delete:
-                    batch_ids = list(outgoing_ids_to_delete)
-                    await user_client.delete_messages(dialog.entity, batch_ids, revoke=True)
-                    deleted_count += len(batch_ids)
+                    if outgoing_ids_to_delete:
+                        batch_ids = list(outgoing_ids_to_delete)
+                        await user_client.delete_messages(dialog.entity, batch_ids, revoke=True)
+                        deleted_count += len(batch_ids)
 
-                if incoming_revoke_ids_to_delete:
-                    batch_ids = list(incoming_revoke_ids_to_delete)
-                    await user_client.delete_messages(dialog.entity, batch_ids, revoke=True)
-                    deleted_count += len(batch_ids)
+                    if incoming_revoke_ids_to_delete:
+                        batch_ids = list(incoming_revoke_ids_to_delete)
+                        await user_client.delete_messages(dialog.entity, batch_ids, revoke=True)
+                        deleted_count += len(batch_ids)
 
-                if incoming_local_ids_to_delete:
-                    batch_ids = list(incoming_local_ids_to_delete)
-                    await user_client.delete_messages(dialog.entity, batch_ids, revoke=False)
-                    deleted_count += len(batch_ids)
+                    if incoming_local_ids_to_delete:
+                        batch_ids = list(incoming_local_ids_to_delete)
+                        await user_client.delete_messages(dialog.entity, batch_ids, revoke=False)
+                        deleted_count += len(batch_ids)
 
-            except Exception as e:
-                chat_name = getattr(dialog, 'name', None) or getattr(dialog.entity, 'title', None) or str(dialog.id)
-                failed_chats.append(f"{chat_name}: {e}")
-
-        if progress_callback and keywords:
-            final_keyword_index = min(processed_keyword_index or 1, len(keywords))
-            await progress_callback(
-                keyword=keywords[final_keyword_index - 1],
-                keyword_index=final_keyword_index,
-                total_keywords=len(keywords),
-                scanned_chats=scanned_chats,
-                total_chats=total_target_chats,
-                deleted_count=deleted_count
-            )
+                except Exception as e:
+                    chat_name = getattr(dialog, 'name', None) or getattr(dialog.entity, 'title', None) or str(dialog.id)
+                    failed_chats.append(f"[{keyword}] {chat_name}: {e}")
     finally:
         await user_client.disconnect()
 
