@@ -6,6 +6,7 @@ import qrcode
 import re
 from datetime import datetime
 from telethon import TelegramClient, events, Button
+from telethon.errors import FloodWaitError
 from dotenv import load_dotenv
 from telegram_sender import TelegramSender
 
@@ -585,6 +586,7 @@ async def conversation_handler(event):
         )
 
         last_progress_marker = {'value': None}
+        flood_wait_notified_seconds = {'value': None}
         async def update_progress(keyword, keyword_index, total_keywords, scanned_chats, total_chats, deleted_count):
             chats_bucket = scanned_chats // 100
             marker = (keyword_index, chats_bucket)
@@ -602,6 +604,13 @@ async def conversation_handler(event):
                     f"Scanned chats: {scanned_chats}/{total_chats}\n"
                     f"Deleted messages: {deleted_count}"
                 )
+            except FloodWaitError as e:
+                wait_seconds = int(getattr(e, 'seconds', 0) or 0)
+                if flood_wait_notified_seconds['value'] != wait_seconds:
+                    flood_wait_notified_seconds['value'] = wait_seconds
+                    await event.respond(
+                        f"⏳ Telegram limited status updates. FloodWait: {wait_seconds}s"
+                    )
             except Exception:
                 pass
 
