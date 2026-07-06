@@ -264,6 +264,11 @@ def can_delete_for_everyone(entity):
     return False
 
 
+def is_supported_cleanup_dialog(dialog):
+    entity = dialog.entity
+    return not getattr(entity, 'broadcast', False)
+
+
 async def delete_messages_by_keywords(keywords, protected_chat_ids=None, progress_callback=None):
     deleted_count = 0
     matched_count = 0
@@ -278,7 +283,10 @@ async def delete_messages_by_keywords(keywords, protected_chat_ids=None, progres
             raise RuntimeError("User session not authorized. Use **🔑 Auth** first.")
 
         dialogs = await user_client.get_dialogs(limit=None)
-        target_dialogs = [dialog for dialog in dialogs if dialog.id not in protected_chat_ids]
+        target_dialogs = [
+            dialog for dialog in dialogs
+            if dialog.id not in protected_chat_ids and is_supported_cleanup_dialog(dialog)
+        ]
         total_target_chats = len(target_dialogs)
 
         for keyword_index, keyword in enumerate(keywords, start=1):
@@ -578,10 +586,10 @@ async def conversation_handler(event):
 
         last_progress_marker = {'value': None}
         async def update_progress(keyword, keyword_index, total_keywords, scanned_chats, total_chats, deleted_count):
-            chats_bucket = scanned_chats // 150
+            chats_bucket = scanned_chats // 100
             marker = (keyword_index, chats_bucket)
             should_update = scanned_chats == 1 or scanned_chats == total_chats
-            should_update = should_update or scanned_chats % 150 == 0
+            should_update = should_update or scanned_chats % 100 == 0
             should_update = should_update or last_progress_marker['value'] is None
             if not should_update or marker == last_progress_marker['value']:
                 return
